@@ -21,7 +21,7 @@ class DiscordVoicePlugin(Star):
             return True
         return user_id in self.allowed_user_ids or user_name in self.allowed_user_ids
 @filter.command("joinvc")
-    async def joinvc(self, event: AstrMessageEvent):
+async def joinvc(self, event: AstrMessageEvent):
         # 1. 平台检查
         if event.get_platform_name() != "discord":
             yield event.plain_result("此指令仅限 Discord 平台使用！")
