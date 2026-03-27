@@ -20,24 +20,33 @@ class DiscordVoicePlugin(Star):
         if not self.allowed_user_ids:
             return True
         return user_id in self.allowed_user_ids or user_name in self.allowed_user_ids
-
-    @filter.command("joinvc")
+@filter.command("joinvc")
     async def joinvc(self, event: AstrMessageEvent):
-        """让机器人加入你当前所在的 Discord 语音频道"""
-        # 1. 安全检查：确保当前运行在 Discord 平台
-        platform = event.get_platform_name()
-        if platform != "discord":
+        # 1. 平台检查
+        if event.get_platform_name() != "discord":
             yield event.plain_result("此指令仅限 Discord 平台使用！")
             return
 
-        # 2. 从 AstrBot 提取底层的 discord.Message 对象
-        raw_msg = event.message_obj.raw_message
+        # 2. 改进后的底层对象获取方式
+        # 尝试从不同的地方抓取 discord.Message
+        raw_msg = None
+        if hasattr(event.message_obj, 'raw_message'):
+            raw_msg = event.message_obj.raw_message
+        
+        # 如果拿到的是封装过的对象，尝试进一步提取
+        if hasattr(raw_msg, 'message'): 
+            raw_msg = raw_msg.message
+
         if not isinstance(raw_msg, discord.Message):
-            yield event.plain_result("获取 Discord 底层消息对象失败。")
+            # 最后的调试手段：打印出类型看看它到底是什么
+            logger.error(f"Debug: raw_msg type is {type(raw_msg)}")
+            yield event.plain_result(f"获取底层对象失败。类型: {type(raw_msg).__name__}")
             return
 
+        # --- 以下逻辑保持不变 ---
         author = raw_msg.author
         guild = raw_msg.guild
+        # ... 后面接你之前的代码
 
         # 3. 权限检查
         if not self._check_user_allowed(str(author.id), author.name):
