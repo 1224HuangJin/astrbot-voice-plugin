@@ -4,34 +4,24 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 
-@register("discord_voice", "YourName", "Discord 语音频道控制插件", "1.0.0")
+@register("discord_voice", "YourName", "Discord 语音频道控制插件", "1.1.0")
 class DiscordVoicePlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        self.allowed_user_ids = [] # 留空代表所有人均可使用
-
-    async def initialize(self):
-        """初始化方法"""
-        logger.info("DiscordVoicePlugin 已成功加载！")
+        self.allowed_user_ids = [] 
 
     def _check_user_allowed(self, user_id: str, user_name: str) -> bool:
-        """检查用户是否有权限使用"""
-        if not self.allowed_user_ids:
-            return True
+        if not self.allowed_user_ids: return True
         return str(user_id) in self.allowed_user_ids or user_name in self.allowed_user_ids
 
-    @filter.command("joinvc")
-    async def joinvc(self, event: AstrMessageEvent):
-        """让机器人加入你当前所在的 Discord 语音频道"""
-        if event.get_platform_name() != "discord":
-            yield event.plain_result("此指令仅限 Discord 平台使用！")
-            return
-
-        # 1. 获取底层对象
+    def _get_discord_context(self, event: AstrMessageEvent):
+        """统一获取作者和服务器对象的私有方法"""
         raw_obj = getattr(event, 'raw_event', getattr(event.message_obj, 'raw_message', None))
+        
+        # 剥离封装层
         if hasattr(raw_obj, 'message') and raw_obj.message:
             raw_obj = raw_obj.message
-
+            
         author = None
         guild = None
 
@@ -41,73 +31,80 @@ class DiscordVoicePlugin(Star):
         elif isinstance(raw_obj, discord.Interaction):
             author = raw_obj.user
             guild = raw_obj.guild
+        elif raw_obj:
+            # 最后的保底尝试
+            author = getattr(raw_obj, 'author', getattr(raw_obj, 'user', None))
+            guild = getattr(raw_obj, 'guild', None)
+            
+        return author, guild
+
+    @filter.command("joinvc")
+    async def joinvc(self, event: AstrMessageEvent):
+        """让机器人加入语音频道"""
+        if event.get_platform_name() != "discord": return
+
+        author, guild = self._get_discord_context(event)
         
         if not author or not guild:
-            yield event.plain_result("❌ 无法解析 Discord 上下文。请确保你在 Discord 频道中发送指令。")
+            yield event.plain_result("❌ 无法获取 Discord 上下文，请确认指令发送环境。")
             return
 
-        # 2. 权限检查
         if not self._check_user_allowed(author.id, author.name):
             yield event.plain_result("你没有权限使用此命令。")
             return
 
-        # 3. 获取语音频道
         if not isinstance(author, discord.Member) or not author.voice or not author.voice.channel:
-            yield event.plain_result("你需要先进入一个语音频道，我才能去找你！")
+            yield event.plain_result("请先进入一个语音频道！")
             return
 
         channel = author.voice.channel
 
-        # 4. 执行连接逻辑 (修复核心错误)
         try:
+            # --- 核心修复：强制清理旧连接 ---
+            # 无论内部状态如何，如果发现有残留连接，先强制断开
             if guild.voice_client:
-                if guild.voice_client.channel.id == channel.id:
-                    yield event.plain_result(f"已经在 **{channel.name}** 里了。")
-                    return
-                await guild.voice_client.disconnect(force=True)
-
-            # --- 修复点：不直接传递 self_deaf 参数 ---
-            await channel.connect() 
+                try:
+                    await guild.voice_client.disconnect(force=True)
+                except:
+                    pass
             
-            # --- 修复点：连接后，通过 change_voice_state 设置静音和拒听 ---
+            # 重新连接
+            await channel.connect()
             await guild.change_voice_state(channel=channel, self_deaf=True, self_mute=True)
             
-            logger.info(f'Bot joined voice channel: {channel.name}')
-
-            # 尝试更新 Presence 状态
-            try:
-                client = guild.me._state._get_client()
-                await client.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=channel.name))
-            except:
-                pass
-
-            yield event.plain_result(f"✅ 已成功加入并静音挂机: **{channel.name}**")
-
+            yield event.plain_result(f"✅ 已加入: **{channel.name}**")
         except Exception as e:
-            logger.error(f"语音连接出错: {e}")
-            yield event.plain_result(f"连接失败：{str(e)}")
+            logger.error(f"JoinVC Error: {e}")
+            yield event.plain_result(f"连接失败: {str(e)}")
 
     @filter.command("leavevc")
     async def leavevc(self, event: AstrMessageEvent):
-        """让机器人离开当前 Discord 语音频道"""
+        """让机器人离开语音频道"""
         if event.get_platform_name() != "discord": return
 
-        raw_obj = getattr(event, 'raw_event', getattr(event.message_obj, 'raw_message', None))
-        if hasattr(raw_obj, 'message'): raw_obj = raw_obj.message
-        
-        guild = getattr(raw_obj, 'guild', None)
+        author, guild = self._get_discord_context(event)
 
-        if guild and guild.voice_client:
-            channel_name = guild.voice_client.channel.name
-            await guild.voice_client.disconnect(force=True)
-            
-            # 恢复状态
+        if not guild:
+            yield event.plain_result("❌ 无法定位服务器。")
+            return
+
+        # 权限检查
+        if author and not self._check_user_allowed(author.id, author.name):
+            yield event.plain_result("你没有权限。")
+            return
+
+        # --- 核心修复：更激进的退出逻辑 ---
+        # 即使 guild.voice_client 看起来是 None，如果实际上机器人还在频道里，
+        # 这里尝试通过 guild 直接寻找 voice_client
+        vc = guild.voice_client
+        
+        if vc:
             try:
-                client = guild.me._state._get_client()
-                await client.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="等待指令..."))
-            except:
-                pass
-                
-            yield event.plain_result(f"👋 已离开 **{channel_name}**")
+                channel_name = vc.channel.name
+                await vc.disconnect(force=True)
+                yield event.plain_result(f"👋 已离开 **{channel_name}**")
+            except Exception as e:
+                yield event.plain_result(f"退出时发生错误: {e}")
         else:
-            yield event.plain_result("我目前没在任何语音频道里。")
+            # 尝试二次清理：如果代码认为没连接，但你手动断开了，这里做一次状态刷新
+            yield event.plain_result("检查到我目前没在任何语音频道中（或连接已失效）。")
