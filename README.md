@@ -1,6 +1,7 @@
 # astrbot-voice-plugin
 
 AstrBot Voice Plugin（AstrBot 语音频道插件）， 此插件全由Gemini更改及优化、但经测试可正常使用。
+
 原存储库：https://github.com/wyf9/wyf9s-discord-bot
 
 ## 免责声明：
