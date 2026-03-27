@@ -103,7 +103,7 @@ async def joinvc(self, event: AstrMessageEvent):
             logger.error(f'Unexpected error in joinvc: {type(e).__name__}: {e}')
             yield event.plain_result(f"发生未知错误：{type(e).__name__}")
 
-    @filter.command("leavevc")
+@filter.command("leavevc")
     async def leavevc(self, event: AstrMessageEvent):
         """让机器人离开当前 Discord 语音频道"""
         platform = event.get_platform_name()
